@@ -40,8 +40,9 @@ def create_quran_video(ayat_texts, translations, audio_paths, bg_path, output_na
     final_audio = concatenate_audioclips(audio_clips)
     total_duration = final_audio.duration
 
-    # 2. Load Background & Adjust duration
-    video = VideoFileClip(bg_path)
+    # 2. Load Background & Adjust duration (Handle URL)
+    local_bg = ensure_local_file(bg_path)
+    video = VideoFileClip(local_bg)
     speed_factor = video.duration / total_duration
     video = video.with_speed_scaled(speed_factor).with_audio(final_audio)
 
