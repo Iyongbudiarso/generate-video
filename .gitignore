@@ -1,0 +1,8 @@
+*.mp4
+*.mp3
+*.otf
+*.ttf
+*.zip
+*.png
+__pycache__/
+.env
