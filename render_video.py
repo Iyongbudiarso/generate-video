@@ -136,27 +136,30 @@ def create_quran_video(ayat_texts, translations, audio_paths, bg_path, output_na
         duration = a_clip.duration
 
         # --- ARABIC RENDERING ---
-        # Penting: Reshape & Bidi agar Arab tidak terbalik/terputus
-        reshaped_ayat = get_display(reshape(ayat))
+        # Gunakan wrap manual agar tidak melebihi lebar dan tidak terpotong di pinggir
+        # Kita tidak menggunakan reshaper & bidi lagi karena sepertinya engine ImageMagick 
+        # di sistem user sudah menanganinya, dan penambahan manual malah membuatnya error/hilang.
+        arabic_width = max(20, int(35 * (video.w / 1080)))
+        wrapped_ayat = textwrap.fill(ayat, width=arabic_width)
         
         # Arabic Clip - Dibatasi tinggi maks 40% video
         tx_a = create_scaled_text(
-            text=reshaped_ayat, 
+            text=wrapped_ayat, 
             font=os.path.join(BASE_DIR, 'UthmanicHafs.otf'),
             initial_size=80, 
             color='#FFD700',
-            max_w=int(video.w * 0.85), 
+            max_w=int(video.w * 0.9), # Lebar sedikit diperluas agar tidak terlalu sempit
             max_h=int(video.h * 0.40),
             stroke_color='#FFD700', 
             stroke_width=1,
             text_align='center', 
-            margin=(10, 20), # Margin horizontal ditambah agar tidak mepet edge
+            margin=(20, 20), # Margin lebih besar (kiri-kanan) agar tidak terpotong
             interline=20
         )
 
         # --- TRANSLATION RENDERING ---
-        # Wrap manual agar lebih pasti tidak terpotong (ImageMagick caption terkadang bermasalah)
-        chars_per_line = max(25, int(50 * (video.w / 1080)))
+        # Wrap manual agar lebih pasti tidak terpotong
+        chars_per_line = max(25, int(45 * (video.w / 1080)))
         wrapped_trans = textwrap.fill(trans, width=chars_per_line)
         
         # Translation Clip - Dibatasi tinggi maks 30% video
@@ -165,12 +168,12 @@ def create_quran_video(ayat_texts, translations, audio_paths, bg_path, output_na
             font=os.path.join(BASE_DIR, 'OpenSauceOne-Bold.ttf'),
             initial_size=35, 
             color='white',
-            max_w=int(video.w * 0.85), 
+            max_w=int(video.w * 0.9), 
             max_h=int(video.h * 0.30),
             stroke_color='white', 
             stroke_width=0,
             text_align='center', 
-            margin=(10, 20),
+            margin=(20, 20),
             interline=10
         )
 
