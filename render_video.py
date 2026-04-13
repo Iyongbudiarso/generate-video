@@ -18,7 +18,7 @@ def ensure_local_file(path_or_url, folder=""):
         # Gunakan nama file dari URL
         filename = path_or_url.split("/")[-1]
         save_path = os.path.join(folder, filename) if folder else filename
-        
+
         if not os.path.exists(save_path):
             print(f"Downloading: {path_or_url} to {save_path}...")
             req = urllib.request.Request(
@@ -28,7 +28,7 @@ def ensure_local_file(path_or_url, folder=""):
             with urllib.request.urlopen(req) as response, open(save_path, 'wb') as out_file:
                 out_file.write(response.read())
         return save_path
-    
+
     # Jika bukan URL, cek apakah file ada di root atau di folder yang ditentukan
     if folder:
         # 1. Cek di root
@@ -38,7 +38,7 @@ def ensure_local_file(path_or_url, folder=""):
         path_in_folder = os.path.join(folder, path_or_url)
         if os.path.exists(path_in_folder):
             return path_in_folder
-            
+
     return path_or_url
 
 def create_quran_video(ayat_texts, translations, audio_paths, bg_path, output_name, watermark, hook, overlay_opacity):
@@ -64,8 +64,15 @@ def create_quran_video(ayat_texts, translations, audio_paths, bg_path, output_na
     # 2. Load Background & Adjust duration (Handle URL & Folders)
     local_bg = ensure_local_file(bg_path, folder="video_bg")
     video = VideoFileClip(local_bg)
-    speed_factor = video.duration / total_duration
-    video = video.with_speed_scaled(speed_factor).with_audio(final_audio)
+    if video.duration < total_duration:
+        # Video lebih pendek dari audio -> Slow down (agar tidak terpotong)
+        speed_factor = video.duration / total_duration
+        video = video.with_speed_scaled(speed_factor)
+    else:
+        # Video lebih panjang atau sama -> Jangan dipercepat (agar tetap normal), potong jika perlu
+        video = video.with_duration(total_duration)
+
+    video = video.with_audio(final_audio)
 
     # 2b. Tambahkan Overlay Hitam (Dimmer) agar teks lebih terbaca
     overlay = ColorClip(size=video.size, color=(0, 0, 0)).with_duration(total_duration).with_opacity(float(overlay_opacity))
@@ -123,11 +130,11 @@ def create_quran_video(ayat_texts, translations, audio_paths, bg_path, output_na
     # 6. Combine All
     # Urutan layer: Background -> Overlay -> Watermark/Hook -> Ayat/Terjemahan
     final_video = CompositeVideoClip([video, overlay, txt_watermark, txt_hook] + all_text_clips)
-    
+
     # Simpan di folder output jika path tidak mengandung folder
     if not os.path.dirname(output_name):
         output_name = os.path.join("output", output_name)
-    
+
     print(f"Rendering final video to: {output_name}...")
     final_video.write_videofile(output_name, fps=24, codec='libx264')
 
