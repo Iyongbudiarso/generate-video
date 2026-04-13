@@ -7,6 +7,7 @@ from moviepy import VideoFileClip, AudioFileClip, TextClip, CompositeVideoClip, 
 from moviepy.video.fx import CrossFadeIn, CrossFadeOut
 from arabic_reshaper import reshape
 from bidi.algorithm import get_display
+import json
 
 # Mencari folder tempat script ini berada secara otomatis
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -20,7 +21,7 @@ def ensure_local_file(path_or_url, folder=""):
         save_path = os.path.join(folder, filename) if folder else filename
 
         if not os.path.exists(save_path):
-            print(f"Downloading: {path_or_url} to {save_path}...")
+            print(f"Downloading: {path_or_url} to {save_path}...", file=sys.stderr)
             req = urllib.request.Request(
                 path_or_url,
                 headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
@@ -40,6 +41,28 @@ def ensure_local_file(path_or_url, folder=""):
             return path_in_folder
 
     return path_or_url
+
+def create_scaled_text(text, font, initial_size, color, max_w, max_h, **kwargs):
+    """Membuat TextClip yang otomatis mengecil jika teks terlalu panjang/tinggi."""
+    current_size = initial_size
+    min_size = 15
+    
+    while current_size >= min_size:
+        clip = TextClip(
+            text=text, 
+            font_size=current_size, 
+            color=color, 
+            font=font, 
+            method='caption', 
+            size=(max_w, None), 
+            **kwargs
+        )
+        if clip.h <= max_h:
+            return clip
+        current_size -= 4  # Kurangi ukuran font secara bertahap
+        
+    # Jika sudah di ukuran minimal tetap tidak cukup
+    return clip
 
 def create_quran_video(ayat_texts, translations, audio_paths, bg_path, output_name, watermark, hook, overlay_opacity):
     # Definisikan path absolut untuk folder-folder dasar
@@ -85,12 +108,21 @@ def create_quran_video(ayat_texts, translations, audio_paths, bg_path, output_na
     # 3. Watermark (Visible all time)
     txt_watermark = TextClip(text=watermark, font_size=12, color='white', font=os.path.join(BASE_DIR, 'Arial.ttf'),
                              method='label').with_opacity(0.5)
-    txt_watermark = txt_watermark.with_position((80, video.h - txt_watermark.h - 280)).with_duration(total_duration)
+    txt_watermark = txt_watermark.with_position((80, video.h - txt_watermark.h - 200)).with_duration(total_duration)
 
     # 4. Hook Text (Visible all time) - Style: Professional Plate
-    txt_hook = TextClip(text=hook.upper(), font_size=42, color='white', font=os.path.join(BASE_DIR, 'Lora.ttf'),
-                        method='caption', size=(int(video.w*0.8), None), text_align='center',
-                        margin=(40, 15), bg_color=(0, 0, 0, 140))
+    # Hook dibatasi tingginya maksimal 15% dari tinggi video
+    txt_hook = create_scaled_text(
+        text=hook.upper(), 
+        font=os.path.join(BASE_DIR, 'Lora.ttf'),
+        initial_size=42, 
+        color='white',
+        max_w=int(video.w * 0.8), 
+        max_h=int(video.h * 0.15),
+        text_align='center', 
+        margin=(40, 15), 
+        bg_color=(0, 0, 0, 140)
+    )
 
     # Posisikan Hook dengan sedikit efek muncul (Fade)
     txt_hook = txt_hook.with_position(('center', int(video.h * 0.12))).with_duration(total_duration)
@@ -103,19 +135,35 @@ def create_quran_video(ayat_texts, translations, audio_paths, bg_path, output_na
     for ayat, trans, a_clip in zip(list_ayats, list_translations, audio_clips):
         duration = a_clip.duration
 
-        # Arabic Clip
-        tx_a = TextClip(text=ayat, font_size=80, color='#FFD700', font=os.path.join(BASE_DIR, 'UthmanicHafs.otf'),
-                        stroke_color='#FFD700', stroke_width=1,
-                        method='caption', size=(int(video.w*0.85), None), text_align='center',
-                        margin=(0, 20), interline=20)
+        # Arabic Clip - Dibatasi tinggi maks 40% video
+        tx_a = create_scaled_text(
+            text=ayat, 
+            font=os.path.join(BASE_DIR, 'UthmanicHafs.otf'),
+            initial_size=80, 
+            color='#FFD700',
+            max_w=int(video.w * 0.85), 
+            max_h=int(video.h * 0.40),
+            stroke_color='#FFD700', 
+            stroke_width=1,
+            text_align='center', 
+            margin=(0, 20), 
+            interline=20
+        )
 
-        # Translation Clip
-        chars_per_line = max(20, int(45 * (video.w / 1080)))
-        wrapped_trans = textwrap.fill(trans, width=chars_per_line)
-        tx_t = TextClip(text=wrapped_trans, font_size=35, color='white', font=os.path.join(BASE_DIR, 'OpenSauceOne-Bold.ttf'),
-                        stroke_color='white', stroke_width=0,
-                        method='caption', size=(int(video.w*0.85), None), text_align='center',
-                        margin=(0, 20), interline=10)
+        # Translation Clip - Dibatasi tinggi maks 30% video
+        tx_t = create_scaled_text(
+            text=trans, 
+            font=os.path.join(BASE_DIR, 'OpenSauceOne-Bold.ttf'),
+            initial_size=35, 
+            color='white',
+            max_w=int(video.w * 0.85), 
+            max_h=int(video.h * 0.30),
+            stroke_color='white', 
+            stroke_width=0,
+            text_align='center', 
+            margin=(0, 20), 
+            interline=10
+        )
 
         # Group centering for this specific verse
         gap = 40
@@ -140,8 +188,17 @@ def create_quran_video(ayat_texts, translations, audio_paths, bg_path, output_na
     if not os.path.dirname(output_name):
         output_name = os.path.join(output_dir, output_name)
 
-    print(f"Rendering final video to: {output_name}...")
-    final_video.write_videofile(output_name, fps=24, codec='libx264')
+    print(f"Rendering final video to: {output_name}...", file=sys.stderr)
+    final_video.write_videofile(output_name, fps=24, codec='libx264', logger=None)
+
+    # Berikan output JSON untuk n8n agar mudah di-parse
+    result = {
+        "status": "success",
+        "output_file": output_name,
+        "absolute_path": os.path.abspath(output_name),
+        "duration": float(total_duration)
+    }
+    print(json.dumps(result))
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Quran Video Generator for Shorts/Reels - Professional & Dynamic")
