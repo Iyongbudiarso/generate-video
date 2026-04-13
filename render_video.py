@@ -8,40 +8,61 @@ from moviepy.video.fx import CrossFadeIn, CrossFadeOut
 from arabic_reshaper import reshape
 from bidi.algorithm import get_display
 
-def ensure_local_file(path_or_url):
-    """Mendownload file jika input adalah URL, jika tidak kembalikan path lokal."""
+# Mencari folder tempat script ini berada secara otomatis
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+def ensure_local_file(path_or_url, folder=""):
+    """Mendownload file ke folder spesifik jika input adalah URL, atau mencari file di folder tersebut."""
+
     if path_or_url.startswith("http"):
         # Gunakan nama file dari URL
         filename = path_or_url.split("/")[-1]
-        if not os.path.exists(filename):
-            print(f"Downloading: {path_or_url}...")
-            # Tambahkan User-Agent agar tidak diblokir server (403 Forbidden)
+        save_path = os.path.join(folder, filename) if folder else filename
+        
+        if not os.path.exists(save_path):
+            print(f"Downloading: {path_or_url} to {save_path}...")
             req = urllib.request.Request(
                 path_or_url,
                 headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
             )
-            with urllib.request.urlopen(req) as response, open(filename, 'wb') as out_file:
+            with urllib.request.urlopen(req) as response, open(save_path, 'wb') as out_file:
                 out_file.write(response.read())
-        return filename
+        return save_path
+    
+    # Jika bukan URL, cek apakah file ada di root atau di folder yang ditentukan
+    if folder:
+        # 1. Cek di root
+        if os.path.exists(path_or_url):
+            return path_or_url
+        # 2. Cek di dalam folder
+        path_in_folder = os.path.join(folder, path_or_url)
+        if os.path.exists(path_in_folder):
+            return path_in_folder
+            
     return path_or_url
 
 def create_quran_video(ayat_texts, translations, audio_paths, bg_path, output_name, watermark, hook, overlay_opacity):
+    # Pastikan folder dasar ada
+    for folder in ["audio", "video_bg", "output"]:
+        if not os.path.exists(folder):
+            os.makedirs(folder)
+
     # Split input by separator '|'
     list_ayats = ayat_texts.split('|')
     list_translations = translations.split('|')
     list_audios = audio_paths.split('|')
 
-    # 1. Load & Concatenate Audios (Handle URLs)
+    # 1. Load & Concatenate Audios (Handle URLs & Folders)
     audio_clips = []
     for a in list_audios:
-        local_path = ensure_local_file(a)
+        local_path = ensure_local_file(a, folder="audio")
         audio_clips.append(AudioFileClip(local_path))
 
     final_audio = concatenate_audioclips(audio_clips)
     total_duration = final_audio.duration
 
-    # 2. Load Background & Adjust duration (Handle URL)
-    local_bg = ensure_local_file(bg_path)
+    # 2. Load Background & Adjust duration (Handle URL & Folders)
+    local_bg = ensure_local_file(bg_path, folder="video_bg")
     video = VideoFileClip(local_bg)
     speed_factor = video.duration / total_duration
     video = video.with_speed_scaled(speed_factor).with_audio(final_audio)
@@ -102,6 +123,12 @@ def create_quran_video(ayat_texts, translations, audio_paths, bg_path, output_na
     # 6. Combine All
     # Urutan layer: Background -> Overlay -> Watermark/Hook -> Ayat/Terjemahan
     final_video = CompositeVideoClip([video, overlay, txt_watermark, txt_hook] + all_text_clips)
+    
+    # Simpan di folder output jika path tidak mengandung folder
+    if not os.path.dirname(output_name):
+        output_name = os.path.join("output", output_name)
+    
+    print(f"Rendering final video to: {output_name}...")
     final_video.write_videofile(output_name, fps=24, codec='libx264')
 
 if __name__ == "__main__":
