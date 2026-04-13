@@ -42,8 +42,13 @@ def ensure_local_file(path_or_url, folder=""):
     return path_or_url
 
 def create_quran_video(ayat_texts, translations, audio_paths, bg_path, output_name, watermark, hook, overlay_opacity):
-    # Pastikan folder dasar ada
-    for folder in ["audio", "video_bg", "output"]:
+    # Definisikan path absolut untuk folder-folder dasar
+    audio_dir = os.path.join(BASE_DIR, "audio")
+    video_bg_dir = os.path.join(BASE_DIR, "video_bg")
+    output_dir = os.path.join(BASE_DIR, "output")
+
+    # Pastikan folder dasar ada di dalam direktori script
+    for folder in [audio_dir, video_bg_dir, output_dir]:
         if not os.path.exists(folder):
             os.makedirs(folder)
 
@@ -55,14 +60,14 @@ def create_quran_video(ayat_texts, translations, audio_paths, bg_path, output_na
     # 1. Load & Concatenate Audios (Handle URLs & Folders)
     audio_clips = []
     for a in list_audios:
-        local_path = ensure_local_file(a, folder="audio")
+        local_path = ensure_local_file(a, folder=audio_dir)
         audio_clips.append(AudioFileClip(local_path))
 
     final_audio = concatenate_audioclips(audio_clips)
     total_duration = final_audio.duration
 
     # 2. Load Background & Adjust duration (Handle URL & Folders)
-    local_bg = ensure_local_file(bg_path, folder="video_bg")
+    local_bg = ensure_local_file(bg_path, folder=video_bg_dir)
     video = VideoFileClip(local_bg)
     if video.duration < total_duration:
         # Video lebih pendek dari audio -> Slow down (agar tidak terpotong)
@@ -80,7 +85,7 @@ def create_quran_video(ayat_texts, translations, audio_paths, bg_path, output_na
     # 3. Watermark (Visible all time)
     txt_watermark = TextClip(text=watermark, font_size=12, color='white', font=os.path.join(BASE_DIR, 'Arial.ttf'),
                              method='label').with_opacity(0.5)
-    txt_watermark = txt_watermark.with_position((80, video.h - txt_watermark.h - 400)).with_duration(total_duration)
+    txt_watermark = txt_watermark.with_position((80, video.h - txt_watermark.h - 280)).with_duration(total_duration)
 
     # 4. Hook Text (Visible all time) - Style: Professional Plate
     txt_hook = TextClip(text=hook.upper(), font_size=42, color='white', font=os.path.join(BASE_DIR, 'Lora.ttf'),
@@ -133,7 +138,7 @@ def create_quran_video(ayat_texts, translations, audio_paths, bg_path, output_na
 
     # Simpan di folder output jika path tidak mengandung folder
     if not os.path.dirname(output_name):
-        output_name = os.path.join("output", output_name)
+        output_name = os.path.join(output_dir, output_name)
 
     print(f"Rendering final video to: {output_name}...")
     final_video.write_videofile(output_name, fps=24, codec='libx264')
