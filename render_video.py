@@ -8,6 +8,7 @@ from moviepy.video.fx import CrossFadeIn, CrossFadeOut
 from arabic_reshaper import reshape
 from bidi.algorithm import get_display
 import json
+import math
 
 # Mencari folder tempat script ini berada secara otomatis
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -63,6 +64,22 @@ def create_scaled_text(text, font, initial_size, color, max_w, max_h, **kwargs):
         
     # Jika sudah di ukuran minimal tetap tidak cukup
     return clip
+
+def split_text_to_pages(text, n_pages):
+    """Membagi teks menjadi beberapa halaman secara proporsional."""
+    if n_pages <= 1:
+        return [text]
+    words = text.split()
+    total_words = len(words)
+    if total_words == 0:
+        return [""] * n_pages
+    words_per_page = math.ceil(total_words / n_pages)
+    pages = []
+    for i in range(n_pages):
+        start = i * words_per_page
+        end = (i + 1) * words_per_page
+        pages.append(" ".join(words[start:end]))
+    return pages
 
 def create_quran_video(ayat_texts, translations, audio_paths, bg_path, output_name, watermark, hook, overlay_opacity):
     # Definisikan path absolut untuk folder-folder dasar
@@ -134,62 +151,73 @@ def create_quran_video(ayat_texts, translations, audio_paths, bg_path, output_na
 
     for ayat, trans, a_clip in zip(list_ayats, list_translations, audio_clips):
         duration = a_clip.duration
-
-        # --- ARABIC RENDERING ---
-        # Gunakan wrap manual agar tidak melebihi lebar dan tidak terpotong di pinggir
-        # Kita tidak menggunakan reshaper & bidi lagi karena sepertinya engine ImageMagick 
-        # di sistem user sudah menanganinya, dan penambahan manual malah membuatnya error/hilang.
-        arabic_width = max(20, int(35 * (video.w / 1080)))
-        wrapped_ayat = textwrap.fill(ayat, width=arabic_width)
         
-        # Arabic Clip - Dibatasi tinggi maks 40% video
-        tx_a = create_scaled_text(
-            text=wrapped_ayat, 
-            font=os.path.join(BASE_DIR, 'UthmanicHafs.otf'),
-            initial_size=80, 
-            color='#FFD700',
-            max_w=int(video.w * 0.9), # Lebar sedikit diperluas agar tidak terlalu sempit
-            max_h=int(video.h * 0.40),
-            stroke_color='#FFD700', 
-            stroke_width=1,
-            text_align='center', 
-            margin=(20, 20), # Margin lebih besar (kiri-kanan) agar tidak terpotong
-            interline=20
-        )
-
-        # --- TRANSLATION RENDERING ---
-        # Wrap manual agar lebih pasti tidak terpotong
-        chars_per_line = max(25, int(45 * (video.w / 1080)))
-        wrapped_trans = textwrap.fill(trans, width=chars_per_line)
+        # --- AUTOMATIC PAGING ---
+        # Jika teks terlalu panjang, bagi menjadi beberapa "halaman" agar tetap terbaca profesional
+        chars_per_page_arabic = 200
+        chars_per_page_trans = 250
         
-        # Translation Clip - Dibatasi tinggi maks 30% video
-        tx_t = create_scaled_text(
-            text=wrapped_trans, 
-            font=os.path.join(BASE_DIR, 'OpenSauceOne-Bold.ttf'),
-            initial_size=35, 
-            color='white',
-            max_w=int(video.w * 0.9), 
-            max_h=int(video.h * 0.30),
-            stroke_color='white', 
-            stroke_width=0,
-            text_align='center', 
-            margin=(20, 20),
-            interline=10
-        )
+        num_pages = math.ceil(max(len(ayat) / chars_per_page_arabic, len(trans) / chars_per_page_trans))
+        pages_a = split_text_to_pages(ayat, num_pages)
+        pages_t = split_text_to_pages(trans, num_pages)
+        page_duration = duration / num_pages
 
-        # Center vertically as a group
-        gap = 40
-        v_height = tx_a.h + gap + tx_t.h
-        v_start_y = (video.h - v_height) // 2
+        for p_idx in range(num_pages):
+            p_ayat = pages_a[p_idx]
+            p_trans = pages_t[p_idx]
+            p_start = current_start + (p_idx * page_duration)
 
-        tx_a = tx_a.with_position(('center', v_start_y)).with_start(current_start).with_duration(duration)
-        tx_t = tx_t.with_position(('center', v_start_y + tx_a.h + gap)).with_start(current_start).with_duration(duration)
+            # --- ARABIC RENDERING ---
+            arabic_width = max(20, int(35 * (video.w / 1080)))
+            wrapped_ayat = textwrap.fill(p_ayat, width=arabic_width)
+            
+            tx_a = create_scaled_text(
+                text=wrapped_ayat, 
+                font=os.path.join(BASE_DIR, 'UthmanicHafs.otf'),
+                initial_size=80, 
+                color='#FFD700',
+                max_w=int(video.w * 0.9),
+                max_h=int(video.h * 0.40),
+                stroke_color='#FFD700', 
+                stroke_width=1,
+                text_align='center', 
+                margin=(20, 20),
+                interline=20
+            )
 
-        # Transitions
-        tx_a = tx_a.with_effects([CrossFadeIn(duration=0.5), CrossFadeOut(duration=0.5)])
-        tx_t = tx_t.with_effects([CrossFadeIn(duration=0.5), CrossFadeOut(duration=0.5)])
+            # --- TRANSLATION RENDERING ---
+            chars_per_line = max(25, int(45 * (video.w / 1080)))
+            wrapped_trans = textwrap.fill(p_trans, width=chars_per_line)
+            
+            tx_t = create_scaled_text(
+                text=wrapped_trans, 
+                font=os.path.join(BASE_DIR, 'OpenSauceOne-Bold.ttf'),
+                initial_size=35, 
+                color='white',
+                max_w=int(video.w * 0.9), 
+                max_h=int(video.h * 0.30),
+                stroke_color='white', 
+                stroke_width=0,
+                text_align='center', 
+                margin=(20, 20),
+                interline=10
+            )
 
-        all_text_clips.extend([tx_a, tx_t])
+            # Center vertically as a group
+            gap = 40
+            v_height = tx_a.h + gap + tx_t.h
+            v_start_y = (video.h - v_height) // 2
+
+            tx_a = tx_a.with_position(('center', v_start_y)).with_start(p_start).with_duration(page_duration)
+            tx_t = tx_t.with_position(('center', v_start_y + tx_a.h + gap)).with_start(p_start).with_duration(page_duration)
+
+            # Transitions - Khusus halaman pertama FadeIn, halaman terakhir FadeOut
+            # Atau gunakan CrossFade halus untuk setiap perpindahan halaman
+            tx_a = tx_a.with_effects([CrossFadeIn(duration=0.4), CrossFadeOut(duration=0.4)])
+            tx_t = tx_t.with_effects([CrossFadeIn(duration=0.4), CrossFadeOut(duration=0.4)])
+
+            all_text_clips.extend([tx_a, tx_t])
+            
         current_start += duration
 
     # 6. Combine All
