@@ -71,12 +71,12 @@ def create_quran_video(ayat_texts, translations, audio_paths, bg_path, output_na
     overlay = ColorClip(size=video.size, color=(0, 0, 0)).with_duration(total_duration).with_opacity(float(overlay_opacity))
 
     # 3. Watermark (Visible all time)
-    txt_watermark = TextClip(text=watermark, font_size=12, color='white', font='Arial.ttf',
+    txt_watermark = TextClip(text=watermark, font_size=12, color='white', font=os.path.join(BASE_DIR, 'Arial.ttf'),
                              method='label').with_opacity(0.5)
     txt_watermark = txt_watermark.with_position((80, video.h - txt_watermark.h - 400)).with_duration(total_duration)
 
     # 4. Hook Text (Visible all time) - Style: Professional Plate
-    txt_hook = TextClip(text=hook.upper(), font_size=42, color='white', font='Lora.ttf',
+    txt_hook = TextClip(text=hook.upper(), font_size=42, color='white', font=os.path.join(BASE_DIR, 'Lora.ttf'),
                         method='caption', size=(int(video.w*0.8), None), text_align='center',
                         margin=(40, 15), bg_color=(0, 0, 0, 140))
 
@@ -92,7 +92,7 @@ def create_quran_video(ayat_texts, translations, audio_paths, bg_path, output_na
         duration = a_clip.duration
 
         # Arabic Clip
-        tx_a = TextClip(text=ayat, font_size=80, color='#FFD700', font='UthmanicHafs.otf',
+        tx_a = TextClip(text=ayat, font_size=80, color='#FFD700', font=os.path.join(BASE_DIR, 'UthmanicHafs.otf'),
                         stroke_color='#FFD700', stroke_width=1,
                         method='caption', size=(int(video.w*0.85), None), text_align='center',
                         margin=(0, 20), interline=20)
@@ -100,7 +100,7 @@ def create_quran_video(ayat_texts, translations, audio_paths, bg_path, output_na
         # Translation Clip
         chars_per_line = max(20, int(45 * (video.w / 1080)))
         wrapped_trans = textwrap.fill(trans, width=chars_per_line)
-        tx_t = TextClip(text=wrapped_trans, font_size=35, color='white', font='OpenSauceOne-Bold.ttf',
+        tx_t = TextClip(text=wrapped_trans, font_size=35, color='white', font=os.path.join(BASE_DIR, 'OpenSauceOne-Bold.ttf'),
                         stroke_color='white', stroke_width=0,
                         method='caption', size=(int(video.w*0.85), None), text_align='center',
                         margin=(0, 20), interline=10)
