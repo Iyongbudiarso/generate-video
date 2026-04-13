@@ -135,9 +135,13 @@ def create_quran_video(ayat_texts, translations, audio_paths, bg_path, output_na
     for ayat, trans, a_clip in zip(list_ayats, list_translations, audio_clips):
         duration = a_clip.duration
 
+        # --- ARABIC RENDERING ---
+        # Penting: Reshape & Bidi agar Arab tidak terbalik/terputus
+        reshaped_ayat = get_display(reshape(ayat))
+        
         # Arabic Clip - Dibatasi tinggi maks 40% video
         tx_a = create_scaled_text(
-            text=ayat, 
+            text=reshaped_ayat, 
             font=os.path.join(BASE_DIR, 'UthmanicHafs.otf'),
             initial_size=80, 
             color='#FFD700',
@@ -146,13 +150,18 @@ def create_quran_video(ayat_texts, translations, audio_paths, bg_path, output_na
             stroke_color='#FFD700', 
             stroke_width=1,
             text_align='center', 
-            margin=(0, 20), 
+            margin=(10, 20), # Margin horizontal ditambah agar tidak mepet edge
             interline=20
         )
 
+        # --- TRANSLATION RENDERING ---
+        # Wrap manual agar lebih pasti tidak terpotong (ImageMagick caption terkadang bermasalah)
+        chars_per_line = max(25, int(50 * (video.w / 1080)))
+        wrapped_trans = textwrap.fill(trans, width=chars_per_line)
+        
         # Translation Clip - Dibatasi tinggi maks 30% video
         tx_t = create_scaled_text(
-            text=trans, 
+            text=wrapped_trans, 
             font=os.path.join(BASE_DIR, 'OpenSauceOne-Bold.ttf'),
             initial_size=35, 
             color='white',
@@ -161,11 +170,11 @@ def create_quran_video(ayat_texts, translations, audio_paths, bg_path, output_na
             stroke_color='white', 
             stroke_width=0,
             text_align='center', 
-            margin=(0, 20), 
+            margin=(10, 20),
             interline=10
         )
 
-        # Group centering for this specific verse
+        # Center vertically as a group
         gap = 40
         v_height = tx_a.h + gap + tx_t.h
         v_start_y = (video.h - v_height) // 2
@@ -173,7 +182,7 @@ def create_quran_video(ayat_texts, translations, audio_paths, bg_path, output_na
         tx_a = tx_a.with_position(('center', v_start_y)).with_start(current_start).with_duration(duration)
         tx_t = tx_t.with_position(('center', v_start_y + tx_a.h + gap)).with_start(current_start).with_duration(duration)
 
-        # Tambahkan Transisi CrossFade (Halus & Transparan)
+        # Transitions
         tx_a = tx_a.with_effects([CrossFadeIn(duration=0.5), CrossFadeOut(duration=0.5)])
         tx_t = tx_t.with_effects([CrossFadeIn(duration=0.5), CrossFadeOut(duration=0.5)])
 
