@@ -15,12 +15,12 @@ import time
 # ============================================================
 def detect_ffmpeg_config():
     """Auto-detect FFmpeg terbaik: prioritaskan system ffmpeg dengan NVENC.
-    
+
     Returns dict: { 'ffmpeg_path', 'codec', 'preset', 'ffmpeg_params', 'label' }
     MoviePy sudah menambahkan -preset sendiri, jadi kita pakai field 'preset' terpisah.
     """
     system_ffmpeg = shutil.which('ffmpeg')
-    
+
     if system_ffmpeg:
         try:
             result = subprocess.run(
@@ -39,7 +39,7 @@ def detect_ffmpeg_config():
                 }
         except Exception:
             pass
-    
+
     # Fallback: libx264 CPU encoding
     return {
         'ffmpeg_path': None,
@@ -141,6 +141,37 @@ def create_scaled_text(text, font, initial_size, color, max_w, max_h, **kwargs):
 
     return best_clip
 
+def apply_rounded_corners(clip, radius=20):
+    """Membuat mask rounded rectangle dan menerapkannya ke clip."""
+    w, h = clip.size
+    r = min(radius, w // 2, h // 2)
+
+    # Buat mask array (1 = visible, 0 = transparent)
+    mask = np.ones((h, w), dtype=np.float32)
+
+    # Buat grid koordinat untuk setiap corner
+    y, x = np.ogrid[:h, :w]
+
+    # Top-left corner
+    corner_mask = (x - r) ** 2 + (y - r) ** 2 > r ** 2
+    mask[:r, :r][corner_mask[:r, :r]] = 0
+
+    # Top-right corner
+    corner_mask = (x - (w - r - 1)) ** 2 + (y - r) ** 2 > r ** 2
+    mask[:r, w-r:][corner_mask[:r, w-r:]] = 0
+
+    # Bottom-left corner
+    corner_mask = (x - r) ** 2 + (y - (h - r - 1)) ** 2 > r ** 2
+    mask[h-r:, :r][corner_mask[h-r:, :r]] = 0
+
+    # Bottom-right corner
+    corner_mask = (x - (w - r - 1)) ** 2 + (y - (h - r - 1)) ** 2 > r ** 2
+    mask[h-r:, w-r:][corner_mask[h-r:, w-r:]] = 0
+
+    from moviepy import ImageClip
+    mask_clip = ImageClip(mask, is_mask=True).with_duration(clip.duration)
+    return clip.with_mask(mask_clip)
+
 def split_text_to_pages(text, n_pages):
     """Membagi teks menjadi beberapa halaman secara proporsional."""
     if n_pages <= 1:
@@ -157,7 +188,7 @@ def split_text_to_pages(text, n_pages):
         pages.append(" ".join(words[start:end]))
     return pages
 
-def create_quran_video(ayat_texts, translations, audio_paths, bg_path, output_name, watermark, hook, overlay_opacity):
+def create_quran_video(ayat_texts, translations, audio_paths, bg_path, output_name, watermark, hook, overlay_opacity, taawudz_url=None):
     start_time = time.time()
 
     # Definisikan path absolut untuk folder-folder dasar
@@ -176,12 +207,24 @@ def create_quran_video(ayat_texts, translations, audio_paths, bg_path, output_na
     list_audios = audio_paths.split('|')
 
     # 1. Load & Concatenate Audios (Handle URLs & Folders)
+    # 1a. Ta'awudz (Audzubillah) - diputar di awal sebelum ayat
+    taawudz_duration = 0
+    taawudz_clip = None
+    if taawudz_url and taawudz_url.lower() != 'none':
+        local_taawudz = ensure_local_file(taawudz_url, folder=audio_dir)
+        taawudz_clip = AudioFileClip(local_taawudz)
+        taawudz_duration = taawudz_clip.duration
+        print(f"Ta'awudz audio loaded: {taawudz_duration:.1f}s", file=sys.stderr)
+
+    # 1b. Audio ayat-ayat
     audio_clips = []
     for a in list_audios:
         local_path = ensure_local_file(a, folder=audio_dir)
         audio_clips.append(AudioFileClip(local_path))
 
-    final_audio = concatenate_audioclips(audio_clips)
+    # 1c. Gabungkan: Ta'awudz + Ayat-ayat
+    all_audio_parts = ([taawudz_clip] if taawudz_clip else []) + audio_clips
+    final_audio = concatenate_audioclips(all_audio_parts)
     total_duration = final_audio.duration
 
     # 2. Load Background & Adjust duration (Handle URL & Folders)
@@ -207,27 +250,50 @@ def create_quran_video(ayat_texts, translations, audio_paths, bg_path, output_na
                              method='label').with_opacity(0.5)
     txt_watermark = txt_watermark.with_position((80, video.h - txt_watermark.h - 200)).with_duration(total_duration)
 
-    # 4. Hook Text (Visible all time) - Style: Professional Plate
-    # Hook dibatasi tingginya maksimal 15% dari tinggi video
-    txt_hook = create_scaled_text(
+    # 4. Hook Text (Visible all time) - Style: Bold White Plate with Rounded Corners
+    # Gunakan bg_color + margin langsung pada TextClip (bukan composite terpisah)
+    # margin 4-tuple: (left, top, right, bottom) — top lebih besar untuk kompensasi baseline rendering
+    hook_max_w = int(video.w * 0.8)
+    txt_hook = TextClip(
         text=hook.upper(),
-        font=os.path.join(BASE_DIR, 'Lora.ttf'),
-        initial_size=42,
-        color='white',
-        max_w=int(video.w * 0.8),
-        max_h=int(video.h * 0.15),
-        text_align='center',
-        margin=(40, 15),
-        bg_color=(0, 0, 0, 140)
+        font=os.path.join(BASE_DIR, 'Montserrat-Bold.ttf'),
+        font_size=42,
+        color='black',
+        method='label',
+        stroke_color='black',
+        stroke_width=1,
+        bg_color='white',
+        margin=(30, 25, 30, 35),
+        horizontal_align='center',
+        vertical_align='center',
     )
+    # Jika terlalu lebar, fallback ke method='caption' dengan width constraint
+    if txt_hook.w > hook_max_w:
+        txt_hook = TextClip(
+            text=hook.upper(),
+            font=os.path.join(BASE_DIR, 'Montserrat-Bold.ttf'),
+            font_size=42,
+            color='black',
+            method='caption',
+            size=(hook_max_w - 60, None),
+            text_align='center',
+            stroke_color='black',
+            stroke_width=1,
+            bg_color='white',
+            margin=(30, 25, 30, 35),
+            horizontal_align='center',
+            vertical_align='center',
+        )
+    txt_hook = apply_rounded_corners(txt_hook, radius=20)
 
     # Posisikan Hook dengan sedikit efek muncul (Fade)
     txt_hook = txt_hook.with_position(('center', int(video.h * 0.12))).with_duration(total_duration)
     txt_hook = txt_hook.with_effects([CrossFadeIn(duration=1.0)])
 
     # 5. Create Verse Clips Sequentially
+    # Offset start time agar teks muncul SETELAH ta'awudz selesai
     all_text_clips = []
-    current_start = 0
+    current_start = taawudz_duration
 
     for ayat, trans, a_clip in zip(list_ayats, list_translations, audio_clips):
         duration = a_clip.duration
@@ -347,6 +413,9 @@ if __name__ == "__main__":
     assets.add_argument("--hook", default="", help="Teks Hook/Judul di bagian atas")
     assets.add_argument("--watermark", default="", help="Teks watermark di kiri bawah")
     assets.add_argument("--overlay", default=0.3, type=float, help="Opacity overlay hitam (0.0 - 1.0, default: 0.3)")
+    assets.add_argument("--taawudz",
+                        default="https://cdn.equran.id/audio-partial/Abdullah-Al-Juhany/001000.mp3",
+                        help="URL/path audio Ta'awudz (Audzubillah) di awal. Gunakan 'none' untuk skip.")
 
     output = parser.add_argument_group('Output')
     output.add_argument("--output", default="output_video.mp4", help="Nama file hasil render")
@@ -362,5 +431,6 @@ if __name__ == "__main__":
         output_name=args.output,
         watermark=args.watermark,
         hook=args.hook,
-        overlay_opacity=args.overlay
+        overlay_opacity=args.overlay,
+        taawudz_url=args.taawudz
     )
