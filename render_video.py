@@ -264,7 +264,7 @@ def split_text_to_pages(text, n_pages):
         pages.append(" ".join(words[start:end]))
     return pages
 
-def create_quran_video(ayat_texts, translations, audio_paths, bg_path, output_name, watermark, hook, overlay_opacity, taawudz_url=None, surah="", cta="", latin_texts="", audio_bg_url=""):
+def create_quran_video(ayat_texts, translations, audio_paths, bg_path, output_name, watermark, hook, overlay_opacity, taawudz_url=None, surah="", cta="", latin_texts="", audio_bg_url="", gap_duration=0.0, pitch_factor=1.0):
     start_time = time.time()
 
     # Definisikan path absolut untuk folder-folder dasar
@@ -284,26 +284,43 @@ def create_quran_video(ayat_texts, translations, audio_paths, bg_path, output_na
     list_latins = latin_texts.split('|') if latin_texts else [""] * len(list_ayats)
 
 
-    # 1. Load & Concatenate Audios (Handle URLs & Folders)
-    # 1a. Ta'awudz (Audzubillah) - diputar di awal sebelum ayat
+    # 1. Load, Pitch Shift & Concatenate Audios 
+    # 1a. Audio ayat-ayat (Terapkan Pitch Shift untuk ngecoh algoritma Content ID)
+    audio_clips = []
+    for a in list_audios:
+        local_path = ensure_local_file(a, folder=audio_dir)
+        a_clip = AudioFileClip(local_path)
+        if pitch_factor != 1.0:
+            a_clip = a_clip.with_speed_scaled(pitch_factor)
+        audio_clips.append(a_clip)
+
+    # 1b. Ta'awudz (Audzubillah)
     taawudz_duration = 0
     taawudz_clip = None
     if taawudz_url and taawudz_url.lower() != 'none':
         local_taawudz = ensure_local_file(taawudz_url, folder=audio_dir)
         taawudz_clip = AudioFileClip(local_taawudz)
+        if pitch_factor != 1.0:
+            taawudz_clip = taawudz_clip.with_speed_scaled(pitch_factor)
         taawudz_duration = taawudz_clip.duration
         print(f"Ta'awudz audio loaded: {taawudz_duration:.1f}s", file=sys.stderr)
 
-    # 1b. Audio ayat-ayat
-    audio_clips = []
-    for a in list_audios:
-        local_path = ensure_local_file(a, folder=audio_dir)
-        audio_clips.append(AudioFileClip(local_path))
+    # 1c. Gabungkan dengan strategi "Jeda/Gap" menggunakan CompositeAudioClip
+    current_time = 0.0
+    voice_clips = []
+    
+    if taawudz_clip:
+        voice_clips.append(taawudz_clip.with_start(current_time))
+        current_time += taawudz_duration + gap_duration
 
-    # 1c. Gabungkan: Ta'awudz + Ayat-ayat
-    all_audio_parts = ([taawudz_clip] if taawudz_clip else []) + audio_clips
-    voice_audio = concatenate_audioclips(all_audio_parts)
-    total_duration = voice_audio.duration
+    for a_clip in audio_clips:
+        voice_clips.append(a_clip.with_start(current_time))
+        current_time += a_clip.duration + gap_duration
+        
+    voice_audio = CompositeAudioClip(voice_clips)
+    
+    # Total durasi dikurangi gap paling akhir yang tidak ada visualnya
+    total_duration = current_time if gap_duration == 0 else current_time - gap_duration
 
     # 1d. Tambahkan Audio Background (Musik/Ambient) Jika Ada
     final_audio = voice_audio
@@ -450,9 +467,9 @@ def create_quran_video(ayat_texts, translations, audio_paths, bg_path, output_na
     extra_clips.append(vis_clip)
 
     # 5. Create Verse Clips Sequentially
-    # Offset start time agar teks muncul SETELAH ta'awudz selesai
     all_text_clips = []
-    current_start = taawudz_duration
+    # Offset waktu agar teks muncul mengikuti audio yang sekarang ada jedanya
+    current_start = taawudz_duration + (gap_duration if taawudz_clip else 0.0)
 
     for ayat, trans, latin, a_clip in zip(list_ayats, list_translations, list_latins, audio_clips):
         duration = a_clip.duration
@@ -560,7 +577,8 @@ def create_quran_video(ayat_texts, translations, audio_paths, bg_path, output_na
 
             all_text_clips.extend(clip_group)
 
-        current_start += duration
+        # Durasi visual ayat + gap untuk ayat berikutnya
+        current_start += duration + gap_duration
 
     # 6. Combine All
     # Overlay sudah di-bake ke background, jadi lebih sedikit layer = lebih cepat
@@ -616,6 +634,8 @@ if __name__ == "__main__":
     assets.add_argument("--audio_bg", default="", help="Path atau URL Audio Background melodi/ambient (Opsional)")
     assets.add_argument("--surah", default="", help="Nama surah dan ayat (misal: Surah Al-Baqarah: 152)")
     assets.add_argument("--cta", default="", help="Teks Call to Action di akhir video (misal: Save untuk nanti)")
+    assets.add_argument("--gap", default=0.0, type=float, help="Jeda antar ayat dalam detik (misal: 2.0 untuk mengecoh Content ID)")
+    assets.add_argument("--pitch", default=1.0, type=float, help="Ubah pitch/speed audio murottal, misal 1.02 (+2%) atau 0.98 (-2%)")
 
     output = parser.add_argument_group('Output')
     output.add_argument("--output", default="output_video.mp4", help="Nama file hasil render")
@@ -636,5 +656,7 @@ if __name__ == "__main__":
         surah=args.surah,
         cta=args.cta,
         latin_texts=args.latin,
-        audio_bg_url=args.audio_bg
+        audio_bg_url=args.audio_bg,
+        gap_duration=args.gap,
+        pitch_factor=args.pitch
     )
