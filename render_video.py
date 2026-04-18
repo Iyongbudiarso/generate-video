@@ -155,10 +155,14 @@ def ensure_local_file(path_or_url, folder=""):
 
     # Jika bukan URL, cek apakah file ada di root atau di folder yang ditentukan
     if folder:
-        # 1. Cek di root
+        # 1. Cek absolute path atau relative ke CWD
         if os.path.exists(path_or_url):
             return path_or_url
-        # 2. Cek di dalam folder
+        # 2. Cek di BASE_DIR (folder tempat script berada)
+        path_in_base = os.path.join(BASE_DIR, path_or_url)
+        if os.path.exists(path_in_base):
+            return path_in_base
+        # 3. Cek di dalam folder spesifik (misal /audio, /video_bg)
         path_in_folder = os.path.join(folder, path_or_url)
         if os.path.exists(path_in_folder):
             return path_in_folder
