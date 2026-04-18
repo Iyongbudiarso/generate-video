@@ -363,108 +363,92 @@ def create_quran_video(ayat_texts, translations, audio_paths, bg_path, output_na
     # 3. Watermark (Visible all time)
     txt_watermark = TextClip(text=watermark, font_size=12, color='white', font=os.path.join(BASE_DIR, 'Arial.ttf'),
                              method='label').with_opacity(0.5)
-    txt_watermark = txt_watermark.with_position((80, video.h - txt_watermark.h - 200)).with_duration(total_duration)
+    txt_watermark = txt_watermark.with_position((80, video.h - txt_watermark.h - 200)).with_duration(total_duration)    # 4. Kalkulasi Layout Area Dinamis
+    # Memastikan teks (Arab/Latin/Terjemah) tidak menabrak Hook di atas & CTA di bawah.
+    safe_top = int(video.h * 0.10) # 10% dari atas
+    safe_bottom = video.h - 150 # reserve area bawah
 
-    # 4. Hook Text (Visible all time) - Style: Bold White Plate with Rounded Corners
-    # Gunakan bg_color + margin langsung pada TextClip (bukan composite terpisah)
-    # margin 4-tuple: (left, top, right, bottom) — top lebih besar untuk kompensasi baseline rendering
+    # Hook Text
     hook_max_w = int(video.w * 0.8)
-    txt_hook = TextClip(
-        text=hook.upper(),
-        font=os.path.join(BASE_DIR, 'Montserrat-Bold.ttf'),
-        font_size=42,
-        color='black',
-        method='label',
-        stroke_color='black',
-        stroke_width=1,
-        bg_color='white',
-        margin=(30, 25, 30, 35),
-        horizontal_align='center',
-        vertical_align='center',
-    )
-    # Jika terlalu lebar, fallback ke method='caption' dengan width constraint
+    txt_hook_params = {
+        'text': hook.upper(), 'font': os.path.join(BASE_DIR, 'Montserrat-Bold.ttf'),
+        'font_size': 42, 'color': 'black', 'stroke_color': 'black', 'stroke_width': 1,
+        'bg_color': 'white', 'margin': (30, 25, 30, 35)
+    }
+    
+    txt_hook = TextClip(**txt_hook_params, method='label', horizontal_align='center', vertical_align='center')
     if txt_hook.w > hook_max_w:
-        txt_hook = TextClip(
-            text=hook.upper(),
-            font=os.path.join(BASE_DIR, 'Montserrat-Bold.ttf'),
-            font_size=42,
-            color='black',
-            method='caption',
-            size=(hook_max_w - 60, None),
-            text_align='center',
-            stroke_color='black',
-            stroke_width=1,
-            bg_color='white',
-            margin=(30, 25, 30, 35),
-            horizontal_align='center',
-            vertical_align='center',
-        )
+        txt_hook = TextClip(**txt_hook_params, method='caption', size=(hook_max_w - 60, None), text_align='center', horizontal_align='center', vertical_align='center')
+    
     txt_hook = apply_rounded_corners(txt_hook, radius=20)
-
-    # Posisikan Hook dengan sedikit efek muncul (Fade)
-    txt_hook = txt_hook.with_position(('center', int(video.h * 0.12))).with_duration(total_duration)
+    txt_hook = txt_hook.with_position(('center', safe_top)).with_duration(total_duration)
     txt_hook = txt_hook.with_effects([CrossFadeIn(duration=1.0)])
+    
+    # Update Safe Top (Bawah Hook)
+    safe_top += txt_hook.h + 20
 
     # --- FITUR VISUAL TAMBAHAN (SOSMED) ---
     extra_clips = []
-
+    
     # A. Informasi Surah
     if surah:
         txt_surah = TextClip(
-            text=surah,
-            font=os.path.join(BASE_DIR, 'OpenSauceOne-Bold.ttf'),
-            font_size=24,
-            color='white',
-            bg_color='black',
-            margin=(20, 10),
-            method='label'
+            text=surah, font=os.path.join(BASE_DIR, 'OpenSauceOne-Bold.ttf'),
+            font_size=24, color='white', bg_color='black', margin=(15, 10), method='label'
         )
         txt_surah = apply_rounded_corners(txt_surah, radius=10).with_opacity(0.8)
-        # Posisi di bawah Hook
-        surah_y = int(video.h * 0.12) + txt_hook.h + 20
-        txt_surah = txt_surah.with_position(('center', surah_y)).with_duration(total_duration)
+        txt_surah = txt_surah.with_position(('center', safe_top)).with_duration(total_duration)
         txt_surah = txt_surah.with_effects([CrossFadeIn(duration=1.2)])
         extra_clips.append(txt_surah)
+        
+        # Update Safe Top turun lagi (Bawah Surah)
+        safe_top += txt_surah.h + 20
 
-    # B. Call to Action (Ajakan Interaksi di akhir video)
+    # B. Audio Visualizer (Ditambahkan di atas Progress Bar)
+    vis_h = 45
+    vis_clip = create_audio_visualizer(final_audio, width=150, height=vis_h, color=(255, 215, 0))
+    vis_y = video.h - 100
+    vis_clip = vis_clip.with_position(('center', vis_y)).with_duration(total_duration)
+    extra_clips.append(vis_clip)
+    
+    # Update Safe Bottom (Atas Visualizer)
+    safe_bottom = vis_y - 20
+
+    # C. Call to Action (CTA) - Muncul Dinamis di atas visualizer
     if cta:
-        cta_duration = min(4.0, total_duration * 0.3) # Muncul selama 4 detik terakhir
+        cta_duration = min(4.0, total_duration * 0.3)
         cta_start = total_duration - cta_duration
         txt_cta = TextClip(
-            text=cta.upper(),
-            font=os.path.join(BASE_DIR, 'Montserrat-Bold.ttf'),
-            font_size=32,
-            color='black',
-            bg_color='#FFD700', # Emas
-            margin=(25, 15),
-            method='label'
+            text=cta.upper(), font=os.path.join(BASE_DIR, 'Montserrat-Bold.ttf'),
+            font_size=32, color='black', bg_color='#FFD700', margin=(20, 15), method='label'
         )
         txt_cta = apply_rounded_corners(txt_cta, radius=15)
-        # Posisi di area bawah layar tapi di atas watermark
-        txt_cta = txt_cta.with_position(('center', int(video.h * 0.75)))
+        # Posisi di area bawah layar tapi di atas visualizer
+        cta_y = safe_bottom - txt_cta.h
+        txt_cta = txt_cta.with_position(('center', cta_y))
         txt_cta = txt_cta.with_start(cta_start).with_duration(cta_duration)
         txt_cta = txt_cta.with_effects([CrossFadeIn(duration=0.5), CrossFadeOut(duration=0.5)])
         extra_clips.append(txt_cta)
+        
+        # Update Safe Bottom (Atas CTA)
+        safe_bottom = cta_y - 20
 
-    # C. Progress Bar
+    # D. Progress Bar (Paling Bawah Frame)
     progress_height = 8
-    # Background Track
     prog_bg = ColorClip(size=(video.w, progress_height), color=(0, 0, 0)).with_opacity(0.4)
     prog_bg = prog_bg.with_position(('center', video.h - progress_height)).with_duration(total_duration)
     extra_clips.append(prog_bg)
-
-    # Indikator Progress Berjalan (Dari kiri ke kanan)
-    prog_bar = ColorClip(size=(video.w, progress_height), color=(255, 215, 0)) # Warna Emas
+    
+    prog_bar = ColorClip(size=(video.w, progress_height), color=(255, 215, 0))
     prog_bar = prog_bar.with_duration(total_duration)
-    # Animasi pergerakan posisi X
     prog_bar = prog_bar.with_position(lambda t: (int((t / total_duration) * video.w) - video.w, video.h - progress_height))
     extra_clips.append(prog_bar)
 
-    # D. Audio Visualizer
-    # Warnanya disamakan dengan warna text Arab (Gold) atau putih, ukuran proposional di bawah tengah layar
-    vis_clip = create_audio_visualizer(final_audio, width=150, height=45, color=(255, 215, 0)) # Emas
-    vis_clip = vis_clip.with_position(('center', video.h - 130)).with_duration(total_duration)
-    extra_clips.append(vis_clip)
+    # Menghitung Kapasitas Area Vertikal Tengah yang Tersisa (Ruang Aman dari tumpang tindih)
+    available_height = safe_bottom - safe_top
+    arab_max_h = max(100, int(available_height * 0.45))
+    latin_max_h = max(50, int(available_height * 0.20))
+    trans_max_h = max(50, int(available_height * 0.35))
 
     # 5. Create Verse Clips Sequentially
     all_text_clips = []
@@ -501,7 +485,7 @@ def create_quran_video(ayat_texts, translations, audio_paths, bg_path, output_na
                 initial_size=80,
                 color='#FFD700',
                 max_w=int(video.w * 0.9),
-                max_h=int(video.h * 0.40),
+                max_h=arab_max_h,
                 stroke_color='#FFD700',
                 stroke_width=1,
                 text_align='center',
@@ -516,13 +500,13 @@ def create_quran_video(ayat_texts, translations, audio_paths, bg_path, output_na
                 wrapped_latin = textwrap.fill(p_latin, width=chars_per_line)
                 tx_l = create_scaled_text(
                     text=wrapped_latin,
-                    font=os.path.join(BASE_DIR, 'Arial.ttf'), # Font standar dan bersih
-                    initial_size=32,
-                    color='#00FFFF', # Cyan cerah agar sangat mudah dibaca dan membedakan dengan terjemahan
+                    font=os.path.join(BASE_DIR, 'Arial.ttf'),
+                    initial_size=28,
+                    color='#38BDF8', # Sky Blue modern untuk latin agar kontras dan memukau
                     max_w=int(video.w * 0.9),
-                    max_h=int(video.h * 0.20),
-                    stroke_color='#00FFFF',
-                    stroke_width=0,
+                    max_h=latin_max_h,
+                    stroke_color='black', # Stroke tebal untuk keterbacaan tingkat tinggi
+                    stroke_width=2,
                     text_align='center',
                     margin=(20, 10),
                     interline=10
@@ -537,9 +521,9 @@ def create_quran_video(ayat_texts, translations, audio_paths, bg_path, output_na
                 initial_size=35,
                 color='white',
                 max_w=int(video.w * 0.9),
-                max_h=int(video.h * 0.30),
-                stroke_color='white',
-                stroke_width=0,
+                max_h=trans_max_h,
+                stroke_color='black', # Tambahan stroke agar terjemahan tidak tenggelam di BG putih cerah
+                stroke_width=1,
                 text_align='center',
                 margin=(20, 20),
                 interline=10
@@ -554,7 +538,8 @@ def create_quran_video(ayat_texts, translations, audio_paths, bg_path, output_na
                 v_height += gap_arab_latin + tx_l.h
             v_height += (gap_latin_trans if tx_l else gap_arab_latin) + tx_t.h
 
-            v_start_y = (video.h - v_height) // 2
+            # Teks dipusatkan secara dinamis di DALAM "Safe Area" (Tengah-tengah ruang aman)
+            v_start_y = safe_top + (available_height - v_height) // 2
 
             # Penempatan posisi vertikal berurutan
             curr_y = v_start_y
