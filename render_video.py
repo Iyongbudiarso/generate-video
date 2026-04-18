@@ -54,7 +54,7 @@ FFMPEG_CONFIG = detect_ffmpeg_config()
 print(f"Encoder: {FFMPEG_CONFIG['label']}", file=sys.stderr)
 
 # Sekarang baru aman import MoviePy (akan pakai FFmpeg yang sudah kita set)
-from moviepy import VideoFileClip, AudioFileClip, TextClip, CompositeVideoClip, concatenate_audioclips, ColorClip
+from moviepy import VideoFileClip, AudioFileClip, TextClip, CompositeVideoClip, concatenate_audioclips, ColorClip, VideoClip, CompositeAudioClip
 from moviepy.video.fx import CrossFadeIn, CrossFadeOut
 from arabic_reshaper import reshape
 from bidi.algorithm import get_display
@@ -62,6 +62,78 @@ import numpy as np
 
 # Mencari folder tempat script ini berada secara otomatis
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+def create_audio_visualizer(audio_clip, width, height, fps=24, num_bars=11, color=(255,215,0)):
+    """Membuat klip visualizer gelombang suara (bar putus-putus) berdasarkan amplitudo audio."""
+    sr = 22050
+    try:
+        audio_data = audio_clip.to_soundarray(fps=sr)
+        if audio_data.ndim == 2:
+            audio_data = audio_data.mean(axis=1) # konversi ke mono
+    except Exception:
+        # Fallback aman jika gagal membaca audio array
+        audio_data = np.zeros(int(audio_clip.duration * sr))
+
+    samples_per_frame = int(sr / fps)
+    num_frames = int(audio_clip.duration * fps) + 2
+
+    # Hitung energi per frame
+    frame_energies = []
+    for i in range(num_frames):
+        start = i * samples_per_frame
+        end = start + samples_per_frame
+        chunk = audio_data[start:end]
+        if len(chunk) > 0:
+            rms = np.sqrt(np.mean(chunk**2))
+        else:
+            rms = 0
+        frame_energies.append(rms)
+
+    max_energy = max(frame_energies) if len(frame_energies) > 0 and max(frame_energies) > 0 else 1.0
+    # Normalisasi dan beri boost
+    frame_energies = [min(1.0, (e / max_energy) * 2.0) for e in frame_energies]
+
+    bar_width = width // num_bars
+    gap = int(bar_width * 0.2) if int(bar_width * 0.2) > 0 else 1
+    actual_bar_w = bar_width - gap
+
+    def get_bars_frame(t, return_mask=False):
+        frame_idx = int(t * fps)
+        if frame_idx >= len(frame_energies):
+            frame_idx = len(frame_energies) - 1
+        energy = frame_energies[frame_idx]
+
+        # Jika mask, return float32 array. Jika tidak, uint8.
+        dtype = np.float32 if return_mask else np.uint8
+        shape = (height, width) if return_mask else (height, width, 3)
+        frame = np.zeros(shape, dtype=dtype)
+
+        for i in range(num_bars):
+            # Efek lengkungan (tengah lebih tinggi)
+            center_dist = abs(i - (num_bars // 2)) / max(1, (num_bars // 2))
+            band_factor = 1.0 - (center_dist * 0.4)
+            # Variasi sinusoidal kecil agar tidak terlalu kaku
+            variation = np.sin((t * 15) + i * 2) * 0.3 + 0.7
+
+            bar_h = int(height * energy * band_factor * variation)
+            bar_h = max(2, min(height, bar_h)) # Pastikan selalu ada titik walau sunyi
+
+            x1 = i * bar_width + gap // 2
+            x2 = x1 + actual_bar_w
+            y1 = height - bar_h
+            y2 = height
+
+            if return_mask:
+                frame[y1:y2, x1:x2] = 1.0
+            else:
+                frame[y1:y2, x1:x2] = color
+
+        return frame
+
+    clip = VideoClip(lambda t: get_bars_frame(t, return_mask=False), duration=audio_clip.duration)
+    mask = VideoClip(lambda t: get_bars_frame(t, return_mask=True), duration=audio_clip.duration)
+    return clip.with_mask(mask)
+
 
 def ensure_local_file(path_or_url, folder=""):
     """Mendownload file ke folder spesifik jika input adalah URL, atau mencari file di folder tersebut."""
@@ -188,7 +260,7 @@ def split_text_to_pages(text, n_pages):
         pages.append(" ".join(words[start:end]))
     return pages
 
-def create_quran_video(ayat_texts, translations, audio_paths, bg_path, output_name, watermark, hook, overlay_opacity, taawudz_url=None, surah="", cta=""):
+def create_quran_video(ayat_texts, translations, audio_paths, bg_path, output_name, watermark, hook, overlay_opacity, taawudz_url=None, surah="", cta="", latin_texts="", audio_bg_url=""):
     start_time = time.time()
 
     # Definisikan path absolut untuk folder-folder dasar
@@ -205,6 +277,8 @@ def create_quran_video(ayat_texts, translations, audio_paths, bg_path, output_na
     list_ayats = ayat_texts.split('|')
     list_translations = translations.split('|')
     list_audios = audio_paths.split('|')
+    list_latins = latin_texts.split('|') if latin_texts else [""] * len(list_ayats)
+
 
     # 1. Load & Concatenate Audios (Handle URLs & Folders)
     # 1a. Ta'awudz (Audzubillah) - diputar di awal sebelum ayat
@@ -224,8 +298,28 @@ def create_quran_video(ayat_texts, translations, audio_paths, bg_path, output_na
 
     # 1c. Gabungkan: Ta'awudz + Ayat-ayat
     all_audio_parts = ([taawudz_clip] if taawudz_clip else []) + audio_clips
-    final_audio = concatenate_audioclips(all_audio_parts)
-    total_duration = final_audio.duration
+    voice_audio = concatenate_audioclips(all_audio_parts)
+    total_duration = voice_audio.duration
+
+    # 1d. Tambahkan Audio Background (Musik/Ambient) Jika Ada
+    final_audio = voice_audio
+    if audio_bg_url and audio_bg_url.lower() != 'none':
+        local_audio_bg = ensure_local_file(audio_bg_url, folder=audio_dir)
+        bg_audio_clip = AudioFileClip(local_audio_bg)
+
+        # Mengecilkan suara background agar tidak menimpa suara lantunan (sekitar 15%)
+        # Kompatibel dengan MoviePy v2
+        bg_audio_clip = bg_audio_clip.with_volume_scaled(0.15)
+
+        # Looping jika audio_bg lebih pendek, atau potong jika lebih panjang
+        if bg_audio_clip.duration < total_duration:
+            num_loops = math.ceil(total_duration / bg_audio_clip.duration)
+            bg_audio_clip = concatenate_audioclips([bg_audio_clip] * num_loops)
+
+        bg_audio_clip = bg_audio_clip.with_duration(total_duration)
+
+        # Gabungkan suara lantunan (voice) dengan suara background
+        final_audio = CompositeAudioClip([bg_audio_clip, voice_audio])
 
     # 2. Load Background & Adjust duration (Handle URL & Folders)
     local_bg = ensure_local_file(bg_path, folder=video_bg_dir)
@@ -292,7 +386,7 @@ def create_quran_video(ayat_texts, translations, audio_paths, bg_path, output_na
 
     # --- FITUR VISUAL TAMBAHAN (SOSMED) ---
     extra_clips = []
-    
+
     # A. Informasi Surah
     if surah:
         txt_surah = TextClip(
@@ -337,7 +431,7 @@ def create_quran_video(ayat_texts, translations, audio_paths, bg_path, output_na
     prog_bg = ColorClip(size=(video.w, progress_height), color=(0, 0, 0)).with_opacity(0.4)
     prog_bg = prog_bg.with_position(('center', video.h - progress_height)).with_duration(total_duration)
     extra_clips.append(prog_bg)
-    
+
     # Indikator Progress Berjalan (Dari kiri ke kanan)
     prog_bar = ColorClip(size=(video.w, progress_height), color=(255, 215, 0)) # Warna Emas
     prog_bar = prog_bar.with_duration(total_duration)
@@ -345,12 +439,18 @@ def create_quran_video(ayat_texts, translations, audio_paths, bg_path, output_na
     prog_bar = prog_bar.with_position(lambda t: (int((t / total_duration) * video.w) - video.w, video.h - progress_height))
     extra_clips.append(prog_bar)
 
+    # D. Audio Visualizer
+    # Warnanya disamakan dengan warna text Arab (Gold) atau putih, ukuran proposional di bawah tengah layar
+    vis_clip = create_audio_visualizer(final_audio, width=150, height=45, color=(255, 215, 0)) # Emas
+    vis_clip = vis_clip.with_position(('center', video.h - 130)).with_duration(total_duration)
+    extra_clips.append(vis_clip)
+
     # 5. Create Verse Clips Sequentially
     # Offset start time agar teks muncul SETELAH ta'awudz selesai
     all_text_clips = []
     current_start = taawudz_duration
 
-    for ayat, trans, a_clip in zip(list_ayats, list_translations, audio_clips):
+    for ayat, trans, latin, a_clip in zip(list_ayats, list_translations, list_latins, audio_clips):
         duration = a_clip.duration
 
         # --- AUTOMATIC PAGING ---
@@ -361,11 +461,13 @@ def create_quran_video(ayat_texts, translations, audio_paths, bg_path, output_na
         num_pages = math.ceil(max(len(ayat) / chars_per_page_arabic, len(trans) / chars_per_page_trans))
         pages_a = split_text_to_pages(ayat, num_pages)
         pages_t = split_text_to_pages(trans, num_pages)
+        pages_l = split_text_to_pages(latin, num_pages) if latin else [""] * num_pages
         page_duration = duration / num_pages
 
         for p_idx in range(num_pages):
             p_ayat = pages_a[p_idx]
             p_trans = pages_t[p_idx]
+            p_latin = pages_l[p_idx]
             p_start = current_start + (p_idx * page_duration)
 
             # --- ARABIC RENDERING ---
@@ -386,8 +488,26 @@ def create_quran_video(ayat_texts, translations, audio_paths, bg_path, output_na
                 interline=20
             )
 
-            # --- TRANSLATION RENDERING ---
+            # --- LATIN RENDERING (OPTIONAL) ---
             chars_per_line = max(25, int(45 * (video.w / 1080)))
+            tx_l = None
+            if p_latin:
+                wrapped_latin = textwrap.fill(p_latin, width=chars_per_line)
+                tx_l = create_scaled_text(
+                    text=wrapped_latin,
+                    font=os.path.join(BASE_DIR, 'Arial.ttf'), # Font standar dan bersih
+                    initial_size=32,
+                    color='#00FFFF', # Cyan cerah agar sangat mudah dibaca dan membedakan dengan terjemahan
+                    max_w=int(video.w * 0.9),
+                    max_h=int(video.h * 0.20),
+                    stroke_color='#00FFFF',
+                    stroke_width=0,
+                    text_align='center',
+                    margin=(20, 10),
+                    interline=10
+                )
+
+            # --- TRANSLATION RENDERING ---
             wrapped_trans = textwrap.fill(p_trans, width=chars_per_line)
 
             tx_t = create_scaled_text(
@@ -404,20 +524,37 @@ def create_quran_video(ayat_texts, translations, audio_paths, bg_path, output_na
                 interline=10
             )
 
-            # Center vertically as a group
-            gap = 40
-            v_height = tx_a.h + gap + tx_t.h
+            # --- LAYOUTING & ALIGNMENT ---
+            gap_arab_latin = 20 if tx_l else 40
+            gap_latin_trans = 20
+
+            v_height = tx_a.h
+            if tx_l:
+                v_height += gap_arab_latin + tx_l.h
+            v_height += (gap_latin_trans if tx_l else gap_arab_latin) + tx_t.h
+
             v_start_y = (video.h - v_height) // 2
 
-            tx_a = tx_a.with_position(('center', v_start_y)).with_start(p_start).with_duration(page_duration)
-            tx_t = tx_t.with_position(('center', v_start_y + tx_a.h + gap)).with_start(p_start).with_duration(page_duration)
+            # Penempatan posisi vertikal berurutan
+            curr_y = v_start_y
 
-            # Transitions - Khusus halaman pertama FadeIn, halaman terakhir FadeOut
-            # Atau gunakan CrossFade halus untuk setiap perpindahan halaman
+            tx_a = tx_a.with_position(('center', curr_y)).with_start(p_start).with_duration(page_duration)
             tx_a = tx_a.with_effects([CrossFadeIn(duration=0.4), CrossFadeOut(duration=0.4)])
-            tx_t = tx_t.with_effects([CrossFadeIn(duration=0.4), CrossFadeOut(duration=0.4)])
+            curr_y += tx_a.h + gap_arab_latin
 
-            all_text_clips.extend([tx_a, tx_t])
+            clip_group = [tx_a]
+
+            if tx_l:
+                tx_l = tx_l.with_position(('center', curr_y)).with_start(p_start).with_duration(page_duration)
+                tx_l = tx_l.with_effects([CrossFadeIn(duration=0.4), CrossFadeOut(duration=0.4)])
+                clip_group.append(tx_l)
+                curr_y += tx_l.h + gap_latin_trans
+
+            tx_t = tx_t.with_position(('center', curr_y)).with_start(p_start).with_duration(page_duration)
+            tx_t = tx_t.with_effects([CrossFadeIn(duration=0.4), CrossFadeOut(duration=0.4)])
+            clip_group.append(tx_t)
+
+            all_text_clips.extend(clip_group)
 
         current_start += duration
 
@@ -461,6 +598,7 @@ if __name__ == "__main__":
     content = parser.add_argument_group('Konten Video')
     content.add_argument("--ayat", required=True, help="Teks ayat Arab (Gunakan | untuk memisahkan multi-ayat)")
     content.add_argument("--trans", required=True, help="Teks terjemahan (Gunakan | untuk memisahkan)")
+    content.add_argument("--latin", default="", help="Teks transliterasi latin (Opsional, gunakan | untuk memisahkan)")
     content.add_argument("--audio", required=True, help="Path lokal atau URL MP3 (Gunakan | untuk memisahkan)")
 
     assets = parser.add_argument_group('Aset & Styling')
@@ -471,6 +609,7 @@ if __name__ == "__main__":
     assets.add_argument("--taawudz",
                         default="https://cdn.equran.id/audio-partial/Abdullah-Al-Juhany/001000.mp3",
                         help="URL/path audio Ta'awudz (Audzubillah) di awal. Gunakan 'none' untuk skip.")
+    assets.add_argument("--audio_bg", default="", help="Path atau URL Audio Background melodi/ambient (Opsional)")
     assets.add_argument("--surah", default="", help="Nama surah dan ayat (misal: Surah Al-Baqarah: 152)")
     assets.add_argument("--cta", default="", help="Teks Call to Action di akhir video (misal: Save untuk nanti)")
 
@@ -491,5 +630,7 @@ if __name__ == "__main__":
         overlay_opacity=args.overlay,
         taawudz_url=args.taawudz,
         surah=args.surah,
-        cta=args.cta
+        cta=args.cta,
+        latin_texts=args.latin,
+        audio_bg_url=args.audio_bg
     )
