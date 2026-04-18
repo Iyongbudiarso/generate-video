@@ -188,7 +188,7 @@ def split_text_to_pages(text, n_pages):
         pages.append(" ".join(words[start:end]))
     return pages
 
-def create_quran_video(ayat_texts, translations, audio_paths, bg_path, output_name, watermark, hook, overlay_opacity, taawudz_url=None):
+def create_quran_video(ayat_texts, translations, audio_paths, bg_path, output_name, watermark, hook, overlay_opacity, taawudz_url=None, surah="", cta=""):
     start_time = time.time()
 
     # Definisikan path absolut untuk folder-folder dasar
@@ -290,6 +290,61 @@ def create_quran_video(ayat_texts, translations, audio_paths, bg_path, output_na
     txt_hook = txt_hook.with_position(('center', int(video.h * 0.12))).with_duration(total_duration)
     txt_hook = txt_hook.with_effects([CrossFadeIn(duration=1.0)])
 
+    # --- FITUR VISUAL TAMBAHAN (SOSMED) ---
+    extra_clips = []
+    
+    # A. Informasi Surah
+    if surah:
+        txt_surah = TextClip(
+            text=surah,
+            font=os.path.join(BASE_DIR, 'OpenSauceOne-Bold.ttf'),
+            font_size=24,
+            color='white',
+            bg_color='black',
+            margin=(20, 10),
+            method='label'
+        )
+        txt_surah = apply_rounded_corners(txt_surah, radius=10).with_opacity(0.8)
+        # Posisi di bawah Hook
+        surah_y = int(video.h * 0.12) + txt_hook.h + 20
+        txt_surah = txt_surah.with_position(('center', surah_y)).with_duration(total_duration)
+        txt_surah = txt_surah.with_effects([CrossFadeIn(duration=1.2)])
+        extra_clips.append(txt_surah)
+
+    # B. Call to Action (Ajakan Interaksi di akhir video)
+    if cta:
+        cta_duration = min(4.0, total_duration * 0.3) # Muncul selama 4 detik terakhir
+        cta_start = total_duration - cta_duration
+        txt_cta = TextClip(
+            text=cta.upper(),
+            font=os.path.join(BASE_DIR, 'Montserrat-Bold.ttf'),
+            font_size=32,
+            color='black',
+            bg_color='#FFD700', # Emas
+            margin=(25, 15),
+            method='label'
+        )
+        txt_cta = apply_rounded_corners(txt_cta, radius=15)
+        # Posisi di area bawah layar tapi di atas watermark
+        txt_cta = txt_cta.with_position(('center', int(video.h * 0.75)))
+        txt_cta = txt_cta.with_start(cta_start).with_duration(cta_duration)
+        txt_cta = txt_cta.with_effects([CrossFadeIn(duration=0.5), CrossFadeOut(duration=0.5)])
+        extra_clips.append(txt_cta)
+
+    # C. Progress Bar
+    progress_height = 8
+    # Background Track
+    prog_bg = ColorClip(size=(video.w, progress_height), color=(0, 0, 0)).with_opacity(0.4)
+    prog_bg = prog_bg.with_position(('center', video.h - progress_height)).with_duration(total_duration)
+    extra_clips.append(prog_bg)
+    
+    # Indikator Progress Berjalan (Dari kiri ke kanan)
+    prog_bar = ColorClip(size=(video.w, progress_height), color=(255, 215, 0)) # Warna Emas
+    prog_bar = prog_bar.with_duration(total_duration)
+    # Animasi pergerakan posisi X
+    prog_bar = prog_bar.with_position(lambda t: (int((t / total_duration) * video.w) - video.w, video.h - progress_height))
+    extra_clips.append(prog_bar)
+
     # 5. Create Verse Clips Sequentially
     # Offset start time agar teks muncul SETELAH ta'awudz selesai
     all_text_clips = []
@@ -368,7 +423,7 @@ def create_quran_video(ayat_texts, translations, audio_paths, bg_path, output_na
 
     # 6. Combine All
     # Overlay sudah di-bake ke background, jadi lebih sedikit layer = lebih cepat
-    final_video = CompositeVideoClip([video, txt_watermark, txt_hook] + all_text_clips)
+    final_video = CompositeVideoClip([video, txt_watermark, txt_hook] + extra_clips + all_text_clips)
 
     # Simpan di folder output jika path tidak mengandung folder
     if not os.path.dirname(output_name):
@@ -416,6 +471,8 @@ if __name__ == "__main__":
     assets.add_argument("--taawudz",
                         default="https://cdn.equran.id/audio-partial/Abdullah-Al-Juhany/001000.mp3",
                         help="URL/path audio Ta'awudz (Audzubillah) di awal. Gunakan 'none' untuk skip.")
+    assets.add_argument("--surah", default="", help="Nama surah dan ayat (misal: Surah Al-Baqarah: 152)")
+    assets.add_argument("--cta", default="", help="Teks Call to Action di akhir video (misal: Save untuk nanti)")
 
     output = parser.add_argument_group('Output')
     output.add_argument("--output", default="output_video.mp4", help="Nama file hasil render")
@@ -432,5 +489,7 @@ if __name__ == "__main__":
         watermark=args.watermark,
         hook=args.hook,
         overlay_opacity=args.overlay,
-        taawudz_url=args.taawudz
+        taawudz_url=args.taawudz,
+        surah=args.surah,
+        cta=args.cta
     )
