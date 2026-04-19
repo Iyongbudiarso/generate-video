@@ -8,6 +8,7 @@ import shutil
 import json
 import math
 import time
+import re
 
 # ============================================================
 # PENTING: Deteksi FFmpeg HARUS dilakukan SEBELUM import MoviePy
@@ -17,32 +18,46 @@ def detect_ffmpeg_config():
     """Auto-detect FFmpeg terbaik: prioritaskan system ffmpeg dengan NVENC.
 
     Returns dict: { 'ffmpeg_path', 'codec', 'preset', 'ffmpeg_params', 'label' }
-    MoviePy sudah menambahkan -preset sendiri, jadi kita pakai field 'preset' terpisah.
     """
     system_ffmpeg = shutil.which('ffmpeg')
 
     if system_ffmpeg:
+        # Trik: Alih-alih cek "-encoders", kita paksa FFmpeg mencoba
+        # melakukan encoding hardware (NVENC) dengan durasi 0 detik ke null output
+        test_nvenc_cmd = [
+            system_ffmpeg,
+            '-f', 'lavfi', '-i', 'nullsrc=s=1280x720:d=1', # Bikin video kosong 1 detik
+            '-c:v', 'h264_nvenc', # Paksa pakai NVENC
+            '-f', 'null', '-' # Buang hasilnya (jangan disimpan)
+        ]
+
         try:
+            # Gunakan check=True agar Python melempar error jika exit code FFmpeg selain 0
             result = subprocess.run(
-                [system_ffmpeg, '-encoders'],
-                capture_output=True, text=True, timeout=5
+                test_nvenc_cmd,
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=True # INI PENTING!
             )
-            if 'h264_nvenc' in result.stdout:
-                # Set env SEBELUM moviepy di-import
-                os.environ['IMAGEIO_FFMPEG_EXE'] = system_ffmpeg
-                return {
-                    'ffmpeg_path': system_ffmpeg,
-                    'codec': 'h264_nvenc',
-                    'preset': 'fast',
-                    'ffmpeg_params': [],
-                    'label': f'GPU NVENC ({system_ffmpeg})'
-                }
-        except Exception:
+
+            # Jika lolos tanpa error, berarti GPU dan Driver NVENC benar-benar aktif!
+            os.environ['IMAGEIO_FFMPEG_EXE'] = system_ffmpeg
+            return {
+                'ffmpeg_path': system_ffmpeg,
+                'codec': 'h264_nvenc',
+                'preset': 'fast',
+                'ffmpeg_params': [],
+                'label': f'GPU NVENC ({system_ffmpeg})'
+            }
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+            # Jika masuk ke sini, artinya NVENC gagal diinisialisasi (misal: libcuda.so tidak ada)
+            # Python akan otomatis melewatinya dan jatuh ke fallback CPU
             pass
 
     # Fallback: libx264 CPU encoding
     return {
-        'ffmpeg_path': None,
+        'ffmpeg_path': None, # Biarkan imageio_ffmpeg bawaan MoviePy yang bekerja jika perlu
         'codec': 'libx264',
         'preset': 'ultrafast',
         'ffmpeg_params': [],
@@ -284,7 +299,7 @@ def create_quran_video(ayat_texts, translations, audio_paths, bg_path, output_na
     list_latins = latin_texts.split('|') if latin_texts else [""] * len(list_ayats)
 
 
-    # 1. Load, Pitch Shift & Concatenate Audios 
+    # 1. Load, Pitch Shift & Concatenate Audios
     # 1a. Audio ayat-ayat (Terapkan Pitch Shift untuk ngecoh algoritma Content ID)
     audio_clips = []
     for a in list_audios:
@@ -308,7 +323,7 @@ def create_quran_video(ayat_texts, translations, audio_paths, bg_path, output_na
     # 1c. Gabungkan dengan strategi "Jeda/Gap" menggunakan CompositeAudioClip
     current_time = 0.0
     voice_clips = []
-    
+
     if taawudz_clip:
         voice_clips.append(taawudz_clip.with_start(current_time))
         current_time += taawudz_duration + gap_duration
@@ -316,9 +331,9 @@ def create_quran_video(ayat_texts, translations, audio_paths, bg_path, output_na
     for a_clip in audio_clips:
         voice_clips.append(a_clip.with_start(current_time))
         current_time += a_clip.duration + gap_duration
-        
+
     voice_audio = CompositeAudioClip(voice_clips)
-    
+
     # Total durasi dikurangi gap paling akhir yang tidak ada visualnya
     total_duration = current_time if gap_duration == 0 else current_time - gap_duration
 
@@ -375,21 +390,21 @@ def create_quran_video(ayat_texts, translations, audio_paths, bg_path, output_na
         'font_size': 42, 'color': 'black', 'stroke_color': 'black', 'stroke_width': 1,
         'bg_color': 'white', 'margin': (30, 25, 30, 35)
     }
-    
+
     txt_hook = TextClip(**txt_hook_params, method='label', horizontal_align='center', vertical_align='center')
     if txt_hook.w > hook_max_w:
         txt_hook = TextClip(**txt_hook_params, method='caption', size=(hook_max_w - 60, None), text_align='center', horizontal_align='center', vertical_align='center')
-    
+
     txt_hook = apply_rounded_corners(txt_hook, radius=20)
     txt_hook = txt_hook.with_position(('center', safe_top)).with_duration(total_duration)
     txt_hook = txt_hook.with_effects([CrossFadeIn(duration=1.0)])
-    
+
     # Update Safe Top (Bawah Hook)
     safe_top += txt_hook.h + 20
 
     # --- FITUR VISUAL TAMBAHAN (SOSMED) ---
     extra_clips = []
-    
+
     # A. Informasi Surah
     if surah:
         txt_surah = TextClip(
@@ -400,7 +415,7 @@ def create_quran_video(ayat_texts, translations, audio_paths, bg_path, output_na
         txt_surah = txt_surah.with_position(('center', safe_top)).with_duration(total_duration)
         txt_surah = txt_surah.with_effects([CrossFadeIn(duration=1.2)])
         extra_clips.append(txt_surah)
-        
+
         # Update Safe Top turun lagi (Bawah Surah)
         safe_top += txt_surah.h + 20
 
@@ -410,7 +425,7 @@ def create_quran_video(ayat_texts, translations, audio_paths, bg_path, output_na
     vis_y = video.h - 100
     vis_clip = vis_clip.with_position(('center', vis_y)).with_duration(total_duration)
     extra_clips.append(vis_clip)
-    
+
     # Update Safe Bottom (Atas Visualizer)
     safe_bottom = vis_y - 20
 
@@ -429,7 +444,7 @@ def create_quran_video(ayat_texts, translations, audio_paths, bg_path, output_na
         txt_cta = txt_cta.with_start(cta_start).with_duration(cta_duration)
         txt_cta = txt_cta.with_effects([CrossFadeIn(duration=0.5), CrossFadeOut(duration=0.5)])
         extra_clips.append(txt_cta)
-        
+
         # Update Safe Bottom (Atas CTA)
         safe_bottom = cta_y - 20
 
@@ -438,7 +453,7 @@ def create_quran_video(ayat_texts, translations, audio_paths, bg_path, output_na
     prog_bg = ColorClip(size=(video.w, progress_height), color=(0, 0, 0)).with_opacity(0.4)
     prog_bg = prog_bg.with_position(('center', video.h - progress_height)).with_duration(total_duration)
     extra_clips.append(prog_bg)
-    
+
     prog_bar = ColorClip(size=(video.w, progress_height), color=(255, 215, 0))
     prog_bar = prog_bar.with_duration(total_duration)
     prog_bar = prog_bar.with_position(lambda t: (int((t / total_duration) * video.w) - video.w, video.h - progress_height))
@@ -566,8 +581,16 @@ def create_quran_video(ayat_texts, translations, audio_paths, bg_path, output_na
         current_start += duration + gap_duration
 
     # 6. Combine All
-    # Overlay sudah di-bake ke background, jadi lebih sedikit layer = lebih cepat
     final_video = CompositeVideoClip([video, txt_watermark, txt_hook] + extra_clips + all_text_clips)
+
+    # Sanitize output_name agar tidak ada simbol yang menyulitkan download (spaces, quotes, dll)
+    base_name = os.path.basename(output_name)
+    sanitized_base_name = re.sub(r'[^a-zA-Z0-9_\-\.]', '_', base_name)
+    # Hapus underscore berlebih jika ada
+    sanitized_base_name = re.sub(r'_+', '_', sanitized_base_name)
+
+    dir_name = os.path.dirname(output_name)
+    output_name = os.path.join(dir_name, sanitized_base_name) if dir_name else sanitized_base_name
 
     # Simpan di folder output jika path tidak mengandung folder
     if not os.path.dirname(output_name):
@@ -597,6 +620,8 @@ def create_quran_video(ayat_texts, translations, audio_paths, bg_path, output_na
         "encoder": FFMPEG_CONFIG['label']
     }
     print(json.dumps(result))
+
+    return result
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Quran Video Generator for Shorts/Reels - Professional & Dynamic")
